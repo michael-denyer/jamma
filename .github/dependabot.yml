@@ -48,6 +48,12 @@ updates:
     groups:
       container-minor-patch:
         update-types: ["minor", "patch"]
+    # docker/requirements-numpy-mkl.txt pins the ILP64 wheels from the custom
+    # index, so a PyPI version would be wrong there. numpy moves with
+    # [build-system].requires in pyproject.toml, and a test asserts they match.
+    ignore:
+      - dependency-name: "numpy"
+      - dependency-name: "mkl-service"
 
   # The two digest-pinned FROM lines in the Dockerfile. Dependabot rewrites
   # `@sha256:` digests in place, which is the only refresh path a digest pin

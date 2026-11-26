@@ -11,29 +11,44 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 DOCKERFILE = ROOT / "Dockerfile"
 REQUIREMENTS = ROOT / "docker/requirements-container.txt"
+NUMPY_MKL_REQUIREMENTS = ROOT / "docker/requirements-numpy-mkl.txt"
+HASHED_REQUIREMENTS = (REQUIREMENTS, NUMPY_MKL_REQUIREMENTS)
 PYPROJECT = ROOT / "pyproject.toml"
 LOCKFILE = ROOT / "uv.lock"
 
 pytestmark = pytest.mark.tier0
 
 
-def _pins(text: str) -> dict[str, str]:
-    """Map package name to version for every `name==version` line in text."""
-    pins = {}
-    for line in text.splitlines():
+def _entries(text: str) -> list[tuple[str, list[str]]]:
+    """Split requirements text into (requirement, hash options) per entry.
+
+    Continuation lines are joined first, so a pin followed by its
+    `--hash=sha256:...` lines is one entry.
+    """
+    entries = []
+    for line in text.replace("\\\n", " ").splitlines():
         entry = line.strip()
         if not entry or entry.startswith("#"):
             continue
-        match = re.fullmatch(r"([A-Za-z0-9_.-]+)==([^=\s]+)", entry)
+        requirement, *options = entry.split()
+        entries.append((requirement, options))
+    return entries
+
+
+def _pins(text: str) -> dict[str, str]:
+    """Map package name to version for every `name==version` entry in text."""
+    pins = {}
+    for requirement, _ in _entries(text):
+        match = re.fullmatch(r"([A-Za-z0-9_.-]+)==([^=\s]+)", requirement)
         if match:
             pins[match.group(1).lower().replace("_", "-")] = match.group(2)
     return pins
 
 
-def _dockerfile_numpy_pin() -> str:
-    match = re.search(r"\bnumpy==([^\s\\]+)", DOCKERFILE.read_text())
-    assert match, "the Dockerfile must pin numpy to an exact version"
-    return match.group(1)
+def _image_numpy_pin() -> str:
+    pins = _pins(NUMPY_MKL_REQUIREMENTS.read_text())
+    assert "numpy" in pins, "requirements-numpy-mkl.txt must pin numpy exactly"
+    return pins["numpy"]
 
 
 def _build_backend_numpy_pin() -> str:
@@ -58,15 +73,16 @@ def test_base_images_are_immutable_and_versioned():
     )
 
 
-def test_container_requirements_are_exactly_pinned():
-    assert REQUIREMENTS.is_file()
-    requirements = [
-        line.strip()
-        for line in REQUIREMENTS.read_text().splitlines()
-        if line.strip() and not line.lstrip().startswith("#")
-    ]
-    assert requirements
-    assert all(re.fullmatch(r"[A-Za-z0-9_.-]+==[^=\s]+", item) for item in requirements)
+@pytest.mark.parametrize("path", HASHED_REQUIREMENTS, ids=lambda path: path.name)
+def test_container_requirements_are_exactly_pinned_and_hashed(path):
+    entries = _entries(path.read_text())
+    assert entries
+    for requirement, options in entries:
+        assert re.fullmatch(r"[A-Za-z0-9_.-]+==[^=\s]+", requirement), requirement
+        assert options, f"{requirement} in {path.name} has no --hash"
+        assert all(re.fullmatch(r"--hash=sha256:[0-9a-f]{64}", o) for o in options), (
+            f"{requirement} in {path.name} has a non-sha256 option: {options}"
+        )
 
 
 def test_image_installs_this_checkout_not_published_jamma():
@@ -77,32 +93,47 @@ def test_image_installs_this_checkout_not_published_jamma():
     assert not re.search(r"pip install[^\n]*\bjamma(?:[=<>!~]|\s|$)", source)
 
 
-def test_every_installed_package_is_pinned_or_this_checkout():
-    """Every install argument is an exact pin, the requirements file, or `.`.
-
-    Keyed on the shape an unpinned input has, not on the spelling of inputs
-    previously removed: a range, a bare name, and a floating tag all fail here
-    regardless of which comparison operator writes them.
-    """
+def _install_lines() -> list[str]:
     source = DOCKERFILE.read_text().replace("\\\n", " ")
-    install_lines = [
+    lines = [
         line for line in source.splitlines() if re.search(r"\bpip install\b", line)
     ]
-    assert install_lines, "the Dockerfile must install something"
+    assert lines, "the Dockerfile must install something"
+    return lines
 
+
+def test_every_installed_package_is_pinned_or_this_checkout():
+    """Every install argument is a hashed requirements file or `.`.
+
+    Keyed on the shape an unpinned input has, not on the spelling of inputs
+    previously removed: a range, a bare name, a floating tag, and an exact pin
+    on the command line (which cannot carry a hash) all fail here.
+    """
     allowed = re.compile(
-        r"[A-Za-z0-9_.-]+==[^=\s]+"  # exact pin
-        r"|\."  # this checkout
-        r"|-r|/tmp/requirements-container\.txt"  # the pinned requirements file
+        r"\."  # this checkout
+        r"|-r|/tmp/requirements-(?:container|numpy-mkl)\.txt"  # hashed pin files
         r"|--[a-z-]+(?:=\S+)?"  # pip flags
         r"|https://\S+"  # --index-url value
         r"|RUN|python|-m|pip|install"
     )
-    for line in install_lines:
+    for line in _install_lines():
         for token in line.split():
             assert allowed.fullmatch(token), (
                 f"unpinned or unexpected install input {token!r} in: {line.strip()}"
             )
+
+
+def test_every_download_is_hash_checked():
+    """Every install that fetches packages runs pip in hash-checking mode.
+
+    Only the install of this checkout (`.`) is exempt: pip refuses
+    `--require-hashes` for a directory.
+    """
+    for line in _install_lines():
+        tokens = line.split()
+        if "." in tokens:
+            continue
+        assert "--require-hashes" in tokens, f"no --require-hashes in: {line.strip()}"
 
 
 def test_dockerfile_numpy_matches_the_build_backend_pin():
@@ -113,7 +144,7 @@ def test_dockerfile_numpy_matches_the_build_backend_pin():
     against the pyproject-pinned PyPI numpy, while the runtime numpy is the
     ILP64 wheel of the same version, so the two pins must agree.
     """
-    assert _dockerfile_numpy_pin() == _build_backend_numpy_pin()
+    assert _image_numpy_pin() == _build_backend_numpy_pin()
 
 
 def test_container_runtime_pins_match_the_lockfile():

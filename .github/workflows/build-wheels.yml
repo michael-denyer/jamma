@@ -8,7 +8,37 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
+  release-gate:
+    if: github.event_name == 'release'
+    name: Verify release tag and CI
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: read # read the default-branch CI result for the exact tagged commit
+    steps:
+      - name: Require a protected version tag on a tested default-branch commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          set -euo pipefail
+          [[ $GITHUB_REF_TYPE == tag && $GITHUB_REF_PROTECTED == true && $GITHUB_REF_NAME =~ ^v[0-9] ]]
+          status=$(gh api "repos/$GITHUB_REPOSITORY/compare/$DEFAULT_BRANCH...$GITHUB_SHA" --jq .status)
+          [[ $status == identical || $status == behind ]]
+          ci=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow ci.yml --event push \
+            --branch "$DEFAULT_BRANCH" --commit "$GITHUB_SHA" --limit 1 --json conclusion --jq '.[0].conclusion')
+          [[ $ci == success ]]
+          version=$(gh api -H 'Accept: application/vnd.github.raw+json' \
+            "repos/$GITHUB_REPOSITORY/contents/pyproject.toml?ref=$GITHUB_SHA" \
+            | python3 -c 'import sys, tomllib; print(tomllib.load(sys.stdin.buffer)["project"]["version"])')
+          [[ $GITHUB_REF_NAME == "v$version" ]]
+
   build_wheels:
     name: Build ${{ matrix.os }} wheels
     runs-on: ${{ matrix.os }}
@@ -137,11 +167,11 @@ jobs:
   # can download from the release assets and pip install the .whl directly.
   upload_avx2_release:
     name: Attach AVX2 wheels to release
-    needs: [build_avx2_wheels]
+    needs: [release-gate, build_avx2_wheels]
     runs-on: ubuntu-latest
     if: github.event_name == 'release'
     permissions:
-      contents: write
+      contents: write # attach tested AVX2 wheels to the release
     steps:
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333  # v8
         with:
@@ -183,13 +213,13 @@ jobs:
 
   upload_pypi:
     name: Upload to PyPI
-    needs: [build_wheels, build_sdist]
+    needs: [release-gate, build_wheels, build_sdist]
     runs-on: ubuntu-latest
     if: github.event_name == 'release'
     environment: pypi
     permissions:
-      id-token: write
-      attestations: write
+      id-token: write # authenticate the registry upload and sign provenance
+      attestations: write # store distribution provenance
       contents: read
     steps:
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333  # v8
